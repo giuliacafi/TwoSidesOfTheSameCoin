@@ -1,0 +1,649 @@
+---
+title: 
+author: 
+date: 
+output: word_document
+---
+
+```{r setup, include=FALSE}
+
+## Set global chunk options
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message = FALSE,
+                      fig.height = 5, fig.width = 8, 
+                      cache = FALSE,
+                      cache.lazy = FALSE)
+
+#Load required libraries
+
+install.packages('fastmap')
+install.packages("tidyverse")
+install.packages("igraph")
+install.packages("visNetwork")
+
+
+
+## Load packages
+if (!require("pacman")) install.packages("pacman")
+p_load("dplyr", 'tidyverse',"fastmap","ggplot2", "readxl",'writexl', 'stringr',
+       "fitdistrplus","gplots", "reshape2", "colorspace","purrr",
+       "readr","ggrepel", "treemap", 'tidyverse', 'igraph', 'visNetwork', 'ggraph')
+
+
+```
+
+```{R set wd}
+setwd("wd")
+```
+
+```{R Load data and convert to long}
+#load datasets
+data <- read_excel("Database.xlsx")
+
+# Convert the data into long format
+library(tidyr)
+data_long <- data %>%
+  pivot_longer(cols = c(res_man, ecotox, beneficial), 
+               names_to = "Category", 
+               values_to = "Value") %>%
+  filter(Value == "x") # Only keep rows where the value is "x"
+```
+
+##VOS viewer analysis
+
+```{r colored categories}
+data_long_colors <- data_long %>%
+  mutate(
+    red = case_when(
+      Category == "res_man"    ~ 87,
+      Category == "ecotox"     ~ 169,
+      Category == "beneficial" ~ 240,
+      TRUE ~ NA_real_
+    ),
+    green = case_when(
+      Category == "res_man"    ~ 100,
+      Category == "ecotox"     ~ 59,
+      Category == "beneficial" ~ 228,
+      TRUE ~ NA_real_
+    ),
+    blue = case_when(
+      Category == "res_man"    ~ 174,
+      Category == "ecotox"     ~ 150,
+      Category == "beneficial" ~ 66,
+      TRUE ~ NA_real_
+    )
+  )
+
+library(readr)
+```
+
+```{R map data}
+
+map_data <- read_tsv(
+  "document map.txt",
+  col_names = TRUE,
+  comment = "#"
+)
+
+map_data <- map_data %>%
+  mutate(
+    DOI = sub("^.*doi\\.org/", "", url)
+  )
+
+
+map_data_merged <- map_data %>%
+  left_join(
+    data_long_colors,
+    by = "DOI"
+  )
+
+table(map_data_merged$Category, useNA = "ifany")
+na_table <- map_data_merged %>%
+  dplyr::filter(is.na(Category))
+
+merge_NA <- data_long_colors %>%
+  left_join(
+    map_data_merged,
+    by = "DOI"
+  )
+
+map_data_merged %>%
+  count(Category, red, green, blue)
+
+map_final <- map_data_merged %>%
+  dplyr::select(
+    id,
+    label,
+    x,
+    y,
+    red,
+    green,
+    blue)
+
+write.table(
+  map_final,
+  "VOSviewer_custom_colors.map",
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE,
+  na = ""
+)
+
+head(map_final)
+
+```
+
+##Summary database
+
+```{R bar plots ADME}
+# Plot ADME 
+
+adme_counts <- data_long %>%
+  group_by(Category, ADME) %>%
+  summarise(n = n(), .groups = "drop")
+
+# Define colors
+adme_colors <- c(
+  "Absorption" = "#56B4E9",
+  "Distribution" = "#D55E00",
+  "Metabolism" = "#009E73",
+  "Excretion" = "#F0E442",
+  "Bioaccumulation" = "#CC79A7"
+)
+
+# Grouped bar plot
+ADME_plot <- ggplot(adme_counts, aes(x = Category, y = n, fill = ADME)) +
+  geom_col(
+    position = position_dodge(width = 0.8),
+    width = 0.7,
+    color = "white"
+  ) +
+  scale_fill_manual(values = adme_colors) +
+  labs(
+    x = "Category",
+    y = "Number of studies",
+    fill = "ADME Process"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 16), 
+  axis.text.y = element_text(size = 10),
+    legend.position = "bottom"
+  )
+ggsave("...\\ADME_plot.pdf", plot = ADME_plot, width = 7, height = 5)
+```
+
+```{R plot papers by cateogry}
+
+# Plot papers by year
+papers_by_year <- data_long %>%
+  group_by(year) %>%
+  summarise(Number_of_papers = n()) %>%
+  arrange(year)
+
+year_plot <- ggplot(papers_by_year, aes(x = factor(year), y = Number_of_papers)) +
+  geom_col(fill = "#C99700") +
+  labs(
+    x = "Year",
+    y = "Number of studies"
+  ) +
+  theme_minimal()+
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+ggsave("...\\year_plot.pdf", plot = year_plot, width = 7, height = 5)
+
+```
+
+```{R count methods, species, pesticides}
+
+# Count methods, species, pesticides
+pesticide_counts <- data_long %>%
+  separate_rows(pesticide, sep = ",\\s*")
+  filter(!is.na(pesticide), pesticide != "")%>%
+  count(pesticide, sort = TRUE)
+
+data_long_invertebrate <- data_long %>%
+  separate_rows(Invertebrate, sep = ",\\s*")
+length(unique(data_long_invertebrate$Invertebrate))
+
+data_long_method <- data_long %>%
+  separate_rows(Method, sep = ",\\s*")
+length(unique(data_long_method$Method))
+
+```
+
+```{R plot methods, species, pesticides}
+
+# Count methods, species, pesticides
+pesticide_counts <- data_long %>%
+  separate_rows(pesticide, sep = ",\\s*")%>%
+  filter(!is.na(pesticide), pesticide != "")%>%
+  distinct(ID, pesticide) %>% 
+  count(pesticide, sort = TRUE)%>%
+  filter(n > 10)
+
+pesticide_plot <- ggplot(pesticide_counts, aes(x = reorder(pesticide, n), y = n)) +
+  geom_col(fill = "#C99700") +
+  labs(
+    x = "Pesticide",
+    y = "Number of studies"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 30,
+      hjust = 1,
+      vjust = 1,
+      size = 12
+    ),
+    axis.title.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    plot.margin = margin(10, 10, 20, 10)
+  )
+ggsave("...\\pesticide_plot.pdf", plot = pesticide_plot, width = 7, height = 5)
+
+species_counts <- data_long %>%
+  separate_rows(species, sep = ",\\s*") %>%
+  filter(!is.na(species), species != "") %>%
+  distinct(ID, species) %>%       
+  count(species, sort = TRUE) %>%
+  filter(n > 8)
+
+species_plot <- ggplot(species_counts, aes(x = reorder(species, n), y = n)) +
+  geom_col(fill = "#C99700") +
+  labs(
+    x = "Species",
+    y = "Number of studies"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 30,
+      hjust = 1,
+      vjust = 1,
+      size = 12
+    ),
+    axis.title.x = element_text(size = 10),
+    axis.title.y = element_text(size = 10),
+    plot.margin = margin(10, 10, 20, 10)
+  )
+ggsave("...\\species_plot.pdf", plot = species_plot, width = 7, height = 5)
+
+```
+
+##Network analysis
+
+```{R}
+#Subsets category
+ecotox_db <- data_long %>%
+  filter(Category == "ecotox")
+res_man_db <- data_long %>%
+  filter(Category == "res_man")
+beneficial_db <- data_long %>%
+  filter(Category == "beneficial")
+
+#convert to long 
+ADME_output_ecotox <- ecotox_db %>%
+  separate_rows(ADME, sep = ",\\s*")
+method_output_ecotox <- ADME_output_ecotox %>%
+  separate_rows(method, sep = ",\\s*")
+
+ADME_output_res_man <- res_man_db %>%
+  separate_rows(ADME, sep = ",\\s*")
+method_output_res_man <- ADME_output_res_man %>%
+  separate_rows(method, sep = ",\\s*")
+
+ADME_output_beneficial <- beneficial_db %>%
+  separate_rows(ADME, sep = ",\\s*")
+method_output_beneficial <- ADME_output_beneficial %>%
+  separate_rows(method, sep = ",\\s*")
+```
+
+```{R subset metabolism}
+#create subsets for data
+method_ecotox <- method_output_ecotox %>% filter(ADME =="Metabolism")
+method_res_man <- method_output_res_man %>% filter(ADME =="Metabolism")
+method_beneficial <- method_output_beneficial %>% filter(ADME =="Metabolism")
+merged_ecotox <- bind_rows(method_ecotox, method_beneficial)
+
+```
+
+```{R subset absorption}
+#create subsets for data
+method_ecotox <- method_output_ecotox %>% filter(ADME =="Absorption")
+method_res_man <- method_output_res_man %>% filter(ADME =="Absorption")
+method_beneficial <- method_output_beneficial %>% filter(ADME =="Absorption")
+merged_ecotox <- bind_rows(method_ecotox, method_beneficial)
+
+```
+
+```{R subset distribution}
+#create subsets for data
+method_ecotox <- method_output_ecotox %>% filter(ADME =="Distribution")
+method_res_man <- method_output_res_man %>% filter(ADME =="Distribution")
+method_beneficial <- method_output_beneficial %>% filter(ADME =="Distribution")
+merged_ecotox <- bind_rows(method_ecotox, method_beneficial)
+
+```
+
+```{R subset excretion}
+#create subsets for data
+method_ecotox <- method_output_ecotox %>% filter(ADME =="Excretion")
+method_res_man <- method_output_res_man %>% filter(ADME =="Excretion")
+method_beneficial <- method_output_beneficial %>% filter(ADME =="Excretion")
+merged_ecotox <- bind_rows(method_ecotox, method_beneficial)
+
+```
+
+```{R network analysis}
+
+#determine frequency of keywords within each group
+method_network <- merged_ecotox
+data_network <- method_network %>% 
+  dplyr::select(ID, ADME, method) 
+
+method_frequency <- data_network %>%
+  count(method, name = "total_count")
+
+frequent_methods <- method_frequency %>%
+  filter(total_count > 0)
+unique(method_network$method)
+
+#create co-occurrence pairs
+pairs_network <- data_network %>% 
+  group_by(ID) %>%
+  summarise(method = list(method), .groups = "drop") %>%
+  mutate(pairs = map(method, ~ {
+    kw <- unique(.x)
+    if (length(kw) < 2) return(NULL)
+    df <- as.data.frame(t(combn(kw, 2)))
+    names(df) <- c("Method1", "Method2")
+    df
+  })) %>%
+  filter(!map_lgl(pairs, is.null)) %>%
+  unnest(pairs) %>%
+  count(Method1, Method2, name = "weight")
+
+#Merge the frequency information with the co-occurrence data
+freq_network <- pairs_network %>%
+  left_join(method_frequency, by = c("Method1" = "method")) %>%
+  rename(total_count_1 = total_count) %>%
+  left_join(method_frequency, by = c("Method2" = "method")) %>%
+  rename(total_count_2 = total_count)
+
+
+edges <- freq_network %>%
+  rename(from = Method1, to = Method2) %>%
+  filter(from %in% frequent_methods$method,
+         to   %in% frequent_methods$method)
+
+nodes <- data_network %>%
+  distinct(method, ADME) %>%
+  rename(name = method) %>%
+  filter(name %in% frequent_methods$method)
+
+# Create the graph object
+network <- graph_from_data_frame(d = edges, vertices = nodes, directed = FALSE)
+
+#Add centrality of the nodes
+# Calculate centrality (e.g., degree centrality) for node sizes
+V(network)$centrality <- degree(network, mode = "all")  # Degree centrality
+
+# Convert igraph object to a data frame for centrality mapping
+node_data <- data.frame(
+  name = V(network)$name,
+  centrality = V(network)$centrality
+)
+
+nodes <- nodes %>%
+  left_join(node_data, by = "name")
+
+# Visualization
+network_plot2 <- ggraph(network, layout = "fr") +
+  
+  # Edge properties
+  geom_edge_link(
+    aes(edge_width = weight),
+    alpha = 0.5,            # Reduced opacity for better readability
+    color = "grey60",       # Standardized edge color
+    show.legend = TRUE
+  ) +
+  
+  # Node properties
+  geom_node_point(
+    aes(size = centrality),
+    color = "#CC79A7",
+    #color = "#C95500",
+    alpha = 1,
+    show.legend = TRUE
+  ) +
+  
+  # Node labels
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 3.5,
+    label.padding = unit(0.5, "lines"),
+    label.size = 0.2,
+    family = "sans",
+    fontface = "bold",
+    color = "black",
+    force = 10,                  # Increased repulsion force
+    max.overlaps = Inf,          # Ensure all labels are shown
+    min.segment.length = 0,      # Allow shorter segments
+    point.padding = unit(1, "lines"),
+    box.padding = unit(1, "lines")
+  ) +
+  
+  # Scale adjustments
+  scale_edge_width(range = c(0.3, 2.5)) +
+  scale_size_continuous(range = c(4, 12), guide = "none") +  # Remove size legend
+  #scale_color_brewer(palette = "Set1") +
+  
+  # Theme customization
+  theme_minimal() +
+  theme(
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 11),
+    legend.position = "right",
+    plot.margin = margin(1, 1, 1, 1, "cm"),
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA),
+    axis.title = element_blank()
+  )
+print(network_plot2)
+metabolism_plot <- network_plot2
+
+# Save plot
+ggsave("...\\metabolism_ecotox.pdf", plot = metabolism_plot, width = 7, height = 5)
+
+```
+
+##Extra figures
+
+```{R Plot network combined non target}
+
+# 1. Define nodes to highlight
+highlight_nodes <- c(
+  "Phylogenetic analysis",
+  "Chromatin analysis",
+  "Heterologous expression",
+  "Recombinant assay",
+  "In vitro metabolism",
+  "Penetration assay",
+  "Histology"
+)
+#highlight_nodes <- c("Metabolite analysis","Tissue accumulation", "Genomic analysis","Enzymatic activity","Oxygen consumption")
+
+
+# 2. Add highlight column to network
+V(network)$highlight <- ifelse(V(network)$name %in% highlight_nodes,
+                              "Unique method",
+                              "Common method")
+
+# 3. Plot
+network_plot2 <- ggraph(network, layout = "fr") +
+  
+  # Edges
+  geom_edge_link(
+    aes(edge_width = weight),
+    alpha = 0.5,
+    color = "grey60",
+    show.legend = TRUE
+  ) +
+  
+  # Nodes (UPDATED COLOR MAPPING)
+  geom_node_point(
+    aes(color = highlight, size = centrality),
+    alpha = 1,
+    show.legend = TRUE
+  ) +
+  
+  # Labels
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 3.5,
+    label.padding = unit(0.5, "lines"),
+    label.size = 0.2,
+    family = "Arial",
+    fontface = "bold",
+    color = "black",
+    force = 10,
+    max.overlaps = Inf,
+    min.segment.length = 0,
+    point.padding = unit(1, "lines"),
+    box.padding = unit(1, "lines")
+  ) +
+  
+  # Scales
+  scale_edge_width(range = c(0.3, 2.5)) +
+  scale_size_continuous(range = c(4, 12), guide = "none") +
+  
+  # 🔴🔵 Manual colors
+  scale_color_manual(
+    values = c(
+        "Common method" = "#9370DB",  # purple
+  "Unique method" = "#D55E00"   # vermillion
+    )
+  ) +
+  
+  # Theme
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 8),
+    legend.box = "vertical",
+    legend.position = "right",
+    plot.margin = margin(0.5, 0.5, 0.5, 0.5, "cm"),
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA),
+    axis.title = element_blank()
+  ) +
+  
+  # Labels
+  labs(
+    title = "Methods to Measure Metabolism in Non-Target Invertebrates",
+    subtitle = "Including beneficial arthropod studies, Co-occurrence Network",
+    color = "node type"
+  ) +
+theme(
+  plot.title = element_text(size = 13, face = "bold"),
+  plot.subtitle = element_text(size = 10)
+)
+
+print(network_plot2)
+
+```
+
+```{R Plot network combined non target}
+
+# 1. Define nodes to highlight
+highlight_nodes <- c(
+  "Mutation assay",
+  "Cytotoxicity assay",
+  "In-situ gene expression",
+  "Penetration assay",
+  "Reporter assay",
+  "Synergism assay"
+)
+
+# 2. Add highlight column to network
+V(network)$highlight <- ifelse(V(network)$name %in% highlight_nodes,
+                              "Unique method",
+                              "Common method")
+
+# 3. Plot
+network_plot2 <- ggraph(network, layout = "fr", niter = 2000) +
+  
+  # Edges
+  geom_edge_link(
+    aes(edge_width = weight),
+    alpha = 0.5,
+    color = "grey60",
+    show.legend = TRUE
+  ) +
+  
+  # Nodes (UPDATED COLOR MAPPING)
+  geom_node_point(
+    aes(color = highlight, size = centrality),
+    alpha = 1,
+    show.legend = TRUE
+  ) +
+  
+  # Labels
+  geom_node_text(
+    aes(label = name),
+    repel = TRUE,
+    size = 3.5,
+    label.padding = unit(0.5, "lines"),
+    label.size = 0.2,
+    family = "Arial",
+    fontface = "bold",
+    color = "black",
+    force = 10,
+    max.overlaps = Inf,
+    min.segment.length = 0,
+    point.padding = unit(1, "lines"),
+    box.padding = unit(1, "lines")
+  ) +
+  
+  # Scales
+  scale_edge_width(range = c(0.3, 2.5)) +
+  scale_size_continuous(range = c(4, 12), guide = "none") +
+  
+  # 🔴🔵 Manual colors
+  scale_color_manual(
+    values = c(
+      "Common method" = "#9370DB",
+      "Unique method" = "#D55E00"
+    )
+  ) +
+  
+  # Theme
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 14, hjust = 0.5),
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.text = element_text(size = 8),
+    legend.box = "vertical",
+    legend.position = "right",
+    plot.margin = margin(0.2, 0.2, 0.2, 0.2, "cm"),
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA),
+    axis.title = element_blank()
+  ) +
+  
+  # Labels
+  labs(
+    title = "Methods to Measure Metabolism in Target Invertebrates",
+    subtitle = "Co-occurrence Network",
+    color = "node type"
+  )
+
+print(network_plot2)
+
+```
+
